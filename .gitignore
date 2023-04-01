@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+spotify-next-track-timing
 
 # Test binary, built with `go test -c`
 *.test

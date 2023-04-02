@@ -90,87 +90,44 @@ func getAuthToken() *oauth2.Token {
 }
 
 func main() {
-	skipInterval := getSkipInterval()
+	if clientID == "" || clientSecret == "" || state == "" {
+		log.Fatalf("Error: Missing environment variables (SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_STATE)")
+	}
+
+	skipInterval := time.Duration(getSkipInterval()) * time.Second
 
 	token := getAuthToken()
 
 	// Create an authenticated Spotify client
 	client := auth.NewClient(token)
 
-	// Create channels for communication
-	trackChange := make(chan bool)
-	pauseTimer := make(chan bool)
-	resumeTimer := make(chan bool)
+	for {
+		// Get the current playback state
+		playback, err := client.PlayerState()
+		if err != nil {
+			log.Fatalf("Error getting playback state: %v", err)
+		}
 
-	// Goroutine to poll the current track in the background
-	go func() {
-		var currentTrackID spotify.ID
-		var trackPaused bool
-		for {
-			// Get the current track
-			playing, err := client.PlayerCurrentlyPlaying()
+		if playback.Item == nil {
+			fmt.Println("No track currently playing.")
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		// Get the current time elapsed in the track
+		elapsedTime := time.Duration(playback.Progress) * time.Millisecond
+
+		// Check if the desired time elapsed has been reached
+		if elapsedTime >= skipInterval {
+			// Skip to the next track
+			err = client.Next()
 			if err != nil {
-				log.Printf("Error getting currently playing track: %s", err)
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			if playing.Item != nil {
-				if playing.Item.ID != currentTrackID {
-					// If the track has changed, send a notification
-					currentTrackID = playing.Item.ID
-					trackChange <- true
-				}
-
-				if playing.Playing && trackPaused {
-					trackPaused = false
-					resumeTimer <- true
-				} else if !playing.Playing && !trackPaused {
-					trackPaused = true
-					pauseTimer <- true
-				}
+				log.Fatalf("Error skipping to the next track: %v", err)
 			}
 			time.Sleep(1 * time.Second)
+		} else {
+			// Sleep for a short interval before checking again
+			time.Sleep(1 * time.Second)
 		}
-	}()
-
-	// Goroutine to skip tracks based on the interval and track change notifications
-	go func() {
-		timer := time.NewTimer(time.Duration(skipInterval) * time.Second)
-		timer.Stop()
-		var timerRunning bool
-
-		for {
-			select {
-			case <-trackChange:
-				// If the track has changed, reset the timer
-				if !timerRunning {
-					timer.Reset(time.Duration(skipInterval) * time.Second)
-					timerRunning = true
-				} else {
-					timer.Reset(time.Duration(skipInterval) * time.Second)
-				}
-			case <-pauseTimer:
-				// If the track is paused, stop the timer
-				timer.Stop()
-				timerRunning = false
-			case <-resumeTimer:
-				// If the track is resumed, restart the timer
-				timer.Reset(time.Duration(skipInterval) * time.Second)
-				timerRunning = true
-			case <-timer.C:
-				// Skip to the next track
-				err := client.Next()
-				if err != nil {
-					log.Printf("Error skipping to the next track: %s", err)
-				} else {
-					fmt.Println("Skipped to the next track!")
-				}
-				timer.Reset(time.Duration(skipInterval) * time.Second)
-			}
-		}
-	}()
-
-	// Keep the program running
-	select {}
+	}
 }
